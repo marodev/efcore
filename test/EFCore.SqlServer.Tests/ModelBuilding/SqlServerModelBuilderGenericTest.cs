@@ -1,9 +1,13 @@
 // Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Microsoft.EntityFrameworkCore.SqlServer.Metadata.Internal;
 using Microsoft.EntityFrameworkCore.TestUtilities;
 using Xunit;
 
@@ -699,8 +703,144 @@ namespace Microsoft.EntityFrameworkCore.ModelBuilding
                 Assert.Equal(nameof(CustomerDetails.Id), owned.FindPrimaryKey().Properties.Single().Name);
             }
 
+            [ConditionalFact]
+            public virtual void Temporal_table_default_settings()
+            {
+                var modelBuilder = CreateModelBuilder();
+                var model = modelBuilder.Model;
+
+                modelBuilder.Entity<Customer>().ToTable(tb => tb.IsTemporal());
+                modelBuilder.FinalizeModel();
+
+                var entity = model.FindEntityType(typeof(Customer));
+                Assert.True(entity.IsTemporal());
+                Assert.Equal("CustomerHistory", entity.TemporalHistoryTableName());
+                Assert.Null(entity.TemporalHistoryTableSchema());
+
+                var periodStart = entity.GetProperties().Single(p => p[SqlServerAnnotationNames.TemporalIsPeriodStart] as bool? == true);
+                var periodEnd = entity.GetProperties().Single(p => p[SqlServerAnnotationNames.TemporalIsPeriodEnd] as bool? == true);
+
+                Assert.Equal("PeriodStart", periodStart.Name);
+                Assert.True(periodStart.IsShadowProperty());
+                Assert.Equal(typeof(DateTime), periodStart.ClrType);
+                Assert.True(periodStart[SqlServerAnnotationNames.TemporalIsPeriodStart] as bool?);
+
+                Assert.Equal("PeriodEnd", periodEnd.Name);
+                Assert.True(periodEnd.IsShadowProperty());
+                Assert.Equal(typeof(DateTime), periodEnd.ClrType);
+                Assert.True(periodEnd[SqlServerAnnotationNames.TemporalIsPeriodEnd] as bool?);
+            }
+
+            [ConditionalFact]
+            public virtual void Temporal_table_with_history_table_configuration()
+            {
+                var modelBuilder = CreateModelBuilder();
+                var model = modelBuilder.Model;
+
+                modelBuilder.Entity<Customer>().ToTable(tb => tb.IsTemporal(ttb =>
+                {
+                    ttb.WithHistoryTable("HistoryTable", "historySchema");
+                    ttb.HasPeriodStart("MyPeriodStart").HasColumnName("PeriodStartColumn");
+                    ttb.HasPeriodEnd("MyPeriodEnd").HasColumnName("PeriodEndColumn");
+                }));
+
+                modelBuilder.FinalizeModel();
+
+                var entity = model.FindEntityType(typeof(Customer));
+                Assert.True(entity.IsTemporal());
+                Assert.Equal("HistoryTable", entity.TemporalHistoryTableName());
+                Assert.Equal("historySchema", entity.TemporalHistoryTableSchema());
+
+                var periodStart = entity.GetProperties().Single(p => p[SqlServerAnnotationNames.TemporalIsPeriodStart] as bool? == true);
+                var periodEnd = entity.GetProperties().Single(p => p[SqlServerAnnotationNames.TemporalIsPeriodEnd] as bool? == true);
+
+                Assert.Equal("MyPeriodStart", periodStart.Name);
+                Assert.True(periodStart.IsShadowProperty());
+                Assert.Equal(typeof(DateTime), periodStart.ClrType);
+                Assert.True(periodStart[SqlServerAnnotationNames.TemporalIsPeriodStart] as bool?);
+                Assert.Equal("PeriodStartColumn", periodStart[RelationalAnnotationNames.ColumnName]);
+
+                Assert.Equal("MyPeriodEnd", periodEnd.Name);
+                Assert.True(periodEnd.IsShadowProperty());
+                Assert.Equal(typeof(DateTime), periodEnd.ClrType);
+                Assert.True(periodEnd[SqlServerAnnotationNames.TemporalIsPeriodEnd] as bool?);
+                Assert.Equal("PeriodEndColumn", periodEnd[RelationalAnnotationNames.ColumnName]);
+            }
+
             protected override TestModelBuilder CreateModelBuilder()
                 => CreateTestModelBuilder(SqlServerTestHelpers.Instance);
+        }
+
+        public abstract class TestTemporalTableBuilder<TEntity>
+            where TEntity : class
+        {
+            public abstract TestTemporalTableBuilder<TEntity> WithHistoryTable(string name, string schema);
+
+            public abstract TestTemporalPeriodPropertyBuilder HasPeriodStart(string propertyName);
+            public abstract TestTemporalPeriodPropertyBuilder HasPeriodEnd(string propertyName);
+        }
+
+        public class GenericTestTemporalTableBuilder<TEntity> : TestTemporalTableBuilder<TEntity>, IInfrastructure<TemporalTableBuilder<TEntity>>
+            where TEntity : class
+        {
+            public GenericTestTemporalTableBuilder(TemporalTableBuilder<TEntity> temporalTableBuilder)
+            {
+                TemporalTableBuilder = temporalTableBuilder;
+            }
+
+            protected TemporalTableBuilder<TEntity> TemporalTableBuilder { get; }
+
+            public TemporalTableBuilder<TEntity> Instance => TemporalTableBuilder;
+
+            protected virtual TestTemporalTableBuilder<TEntity> Wrap(TemporalTableBuilder<TEntity> tableBuilder)
+                => new GenericTestTemporalTableBuilder<TEntity>(tableBuilder);
+
+            public override TestTemporalTableBuilder<TEntity> WithHistoryTable(string name, string schema)
+                => Wrap(TemporalTableBuilder.WithHistoryTable(name, schema));
+
+            public override TestTemporalPeriodPropertyBuilder HasPeriodStart(string propertyName)
+                => new TestTemporalPeriodPropertyBuilder(TemporalTableBuilder.HasPeriodStart(propertyName));
+
+            public override TestTemporalPeriodPropertyBuilder HasPeriodEnd(string propertyName)
+                => new TestTemporalPeriodPropertyBuilder(TemporalTableBuilder.HasPeriodEnd(propertyName));
+        }
+
+        public class NonGenericTestTemporalTableBuilder<TEntity> : TestTemporalTableBuilder<TEntity>, IInfrastructure<TemporalTableBuilder>
+            where TEntity : class
+        {
+            public NonGenericTestTemporalTableBuilder(TemporalTableBuilder temporalTableBuilder)
+            {
+                TemporalTableBuilder = temporalTableBuilder;
+            }
+
+            protected TemporalTableBuilder TemporalTableBuilder { get; }
+
+            public TemporalTableBuilder Instance => TemporalTableBuilder;
+
+            protected virtual TestTemporalTableBuilder<TEntity> Wrap(TemporalTableBuilder temporalTableBuilder)
+                => new NonGenericTestTemporalTableBuilder<TEntity>(temporalTableBuilder);
+
+            public override TestTemporalTableBuilder<TEntity> WithHistoryTable(string name, string schema)
+                => Wrap(TemporalTableBuilder.WithHistoryTable(name, schema));
+
+            public override TestTemporalPeriodPropertyBuilder HasPeriodStart(string propertyName)
+                => new TestTemporalPeriodPropertyBuilder(TemporalTableBuilder.HasPeriodStart(propertyName));
+
+            public override TestTemporalPeriodPropertyBuilder HasPeriodEnd(string propertyName)
+                => new TestTemporalPeriodPropertyBuilder(TemporalTableBuilder.HasPeriodEnd(propertyName));
+        }
+
+        public class TestTemporalPeriodPropertyBuilder
+        {
+            public TestTemporalPeriodPropertyBuilder(TemporalPeriodPropertyBuilder temporalPeriodPropertyBuilder)
+            {
+                TemporalPeriodPropertyBuilder = temporalPeriodPropertyBuilder;
+            }
+
+            protected TemporalPeriodPropertyBuilder TemporalPeriodPropertyBuilder { get; }
+
+            public TestTemporalPeriodPropertyBuilder HasColumnName(string name)
+                => new TestTemporalPeriodPropertyBuilder(TemporalPeriodPropertyBuilder.HasColumnName(name));
         }
     }
 }

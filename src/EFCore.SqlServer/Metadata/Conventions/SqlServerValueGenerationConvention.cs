@@ -50,6 +50,15 @@ namespace Microsoft.EntityFrameworkCore.Metadata.Conventions
                 return;
             }
 
+            if ((name == SqlServerAnnotationNames.TemporalIsPeriodStart
+                || name == SqlServerAnnotationNames.TemporalIsPeriodEnd)
+                && annotation != null
+                && annotation.Value as bool? == true)
+            {
+                propertyBuilder.ValueGenerated(ValueGenerated.OnAddOrUpdate);
+                //propertyBuilder.ValueGenerated(GetValueGenerated(propertyBuilder.Metadata));
+            }
+
             base.ProcessPropertyAnnotationChanged(propertyBuilder, name, annotation, oldAnnotation, context);
         }
 

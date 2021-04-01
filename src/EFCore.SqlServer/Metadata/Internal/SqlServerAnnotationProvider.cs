@@ -92,10 +92,26 @@ namespace Microsoft.EntityFrameworkCore.SqlServer.Metadata.Internal
         /// </summary>
         public override IEnumerable<IAnnotation> For(ITable table)
         {
+            var entityType = table.EntityTypeMappings.First().EntityType;
+
             // Model validation ensures that these facets are the same on all mapped entity types
-            if (table.EntityTypeMappings.First().EntityType.IsMemoryOptimized())
+            if (entityType.IsMemoryOptimized())
             {
                 yield return new Annotation(SqlServerAnnotationNames.MemoryOptimized, true);
+            }
+
+            if (entityType.IsTemporal())
+            {
+                yield return new Annotation(SqlServerAnnotationNames.IsTemporal, entityType.IsTemporal());
+                yield return new Annotation(SqlServerAnnotationNames.TemporalHistoryTableName, entityType.TemporalHistoryTableName());
+                yield return new Annotation(SqlServerAnnotationNames.TemporalHistoryTableSchema, entityType.TemporalHistoryTableSchema());
+
+                var storeObjectIdentifier = StoreObjectIdentifier.Table(table.Name, table.Schema);
+                var periodStartProperty = entityType.GetProperties().Where(p => p[SqlServerAnnotationNames.TemporalIsPeriodStart] as bool? == true).Single();
+                yield return new Annotation(SqlServerAnnotationNames.TemporalPeriodStartColumnName, periodStartProperty.GetColumnName(storeObjectIdentifier));
+
+                var periodEndProperty = entityType.GetProperties().Where(p => p[SqlServerAnnotationNames.TemporalIsPeriodEnd] as bool? == true).Single();
+                yield return new Annotation(SqlServerAnnotationNames.TemporalPeriodEndColumnName, periodEndProperty.GetColumnName(storeObjectIdentifier));
             }
         }
 
@@ -191,6 +207,34 @@ namespace Microsoft.EntityFrameworkCore.SqlServer.Metadata.Internal
             if (property.IsSparse() is bool isSparse)
             {
                 yield return new Annotation(SqlServerAnnotationNames.Sparse, isSparse);
+            }
+
+            var entityType = column.Table.EntityTypeMappings.First().EntityType;
+            if (entityType.IsTemporal())
+            {
+                if (property[SqlServerAnnotationNames.TemporalIsPeriodStart] as bool? == true
+                    || property[SqlServerAnnotationNames.TemporalIsPeriodEnd] as bool? == true)
+                {
+                    yield return new Annotation(SqlServerAnnotationNames.IsTemporal, entityType.IsTemporal());
+
+                    var storeObjectIdentifier = StoreObjectIdentifier.Table(table.Name, table.Schema);
+                    if (property[SqlServerAnnotationNames.TemporalIsPeriodStart] as bool? == true)
+                    {
+                        yield return new Annotation(SqlServerAnnotationNames.TemporalIsPeriodStart, true);
+                        yield return new Annotation(SqlServerAnnotationNames.TemporalPeriodStartColumnName, property.GetColumnName(storeObjectIdentifier));
+
+                        var periodEndProperty = entityType.GetProperties().Where(p => p[SqlServerAnnotationNames.TemporalIsPeriodEnd] as bool? == true).Single();
+                        yield return new Annotation(SqlServerAnnotationNames.TemporalPeriodEndColumnName, periodEndProperty.GetColumnName(storeObjectIdentifier));
+                    }
+                    else
+                    {
+                        yield return new Annotation(SqlServerAnnotationNames.TemporalIsPeriodEnd, true);
+                        yield return new Annotation(SqlServerAnnotationNames.TemporalPeriodEndColumnName, property.GetColumnName(storeObjectIdentifier));
+
+                        var periodStartProperty = entityType.GetProperties().Where(p => p[SqlServerAnnotationNames.TemporalIsPeriodStart] as bool? == true).Single();
+                        yield return new Annotation(SqlServerAnnotationNames.TemporalPeriodStartColumnName, periodStartProperty.GetColumnName(storeObjectIdentifier));
+                    }
+                }
             }
         }
     }
